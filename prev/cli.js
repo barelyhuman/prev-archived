@@ -1,22 +1,22 @@
 #!/usr/bin/env node
 import preactIslandPlugin from '@barelyhuman/preact-island-plugins/esbuild'
 import * as esbuild from 'esbuild'
-import http from 'node:http'
 import { nodeExternalsPlugin } from 'esbuild-node-externals'
 import fs from 'node:fs'
 import fsPromises from 'node:fs/promises'
+import http from 'node:http'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse, print } from 'recast'
 import glob from 'tiny-glob'
 import { log } from './lib/logger.js'
-
 import mdx from '@mdx-js/esbuild'
 import chokidar from 'chokidar'
-import process from 'node:process'
 import coffeescript from 'esbuild-coffeescript'
+import process from 'node:process'
 import { config as userConfig } from '../prev.config.js'
+import { readRoutesFromDirectory } from './core/router.js'
 
 const config = normalizeConfig(userConfig)
 
@@ -29,6 +29,8 @@ const islandDirectory = path.resolve(rootDirectory, 'dist')
 const clientDirectory = '.client'
 const plugRegister = []
 const isDev = process.argv.includes('--dev')
+
+const SERVER_PORT = process.env.PORT || 3000
 const LIVE_SERVER_PORT = process.env.LIVE_SERVER_PORT || 1234
 
 const buildContext = {
@@ -69,7 +71,7 @@ async function main() {
   const entries = await getEntries()
   await builder(islandDirectory, entries)
   await buildContext.build()
-  await initKernel(entries)
+  await initKernel()
 }
 
 async function cleanup() {
@@ -109,6 +111,9 @@ async function builder(baseDir, entries) {
 
   ctx['02-client'] = {
     async rebuild(opts) {
+      if (!fs.existsSync(`${baseDir}/.generated`)) {
+        return
+      }
       const generatedEntries = await glob(
         `${baseDir}/.generated/**/*.client-is*.js`,
         {
@@ -246,24 +251,27 @@ async function watcher() {
     .watch('./src', {
       cwd: rootDirectory,
     })
-    .on('change', async (event, path) => {
+    .on('change', async () => {
       await queueRestart()
     })
   await main()
   liveReloadServer.setup()
 }
 
-async function initKernel(entries) {
+async function initKernel() {
   log.debug('Starting server')
+  await readRoutesFromDirectory({
+    cwd: path.resolve(__dirname, islandDirectory, 'pages'),
+    outDir: path.resolve(__dirname, islandDirectory, 'pages'),
+  })
   const kernel = await config.getKernel()
   await kernel({
-    entries,
     isDev,
+    serverPort: SERVER_PORT,
     liveServerPort: LIVE_SERVER_PORT,
     plugRegister,
     clientDirectory: clientDirectory,
     baseDir: path.resolve(__dirname, islandDirectory),
-    sourceDir: path.resolve(rootDirectory, './src'),
   })
 }
 
@@ -290,7 +298,7 @@ function normalizeConfig(config) {
 
 async function queueRestart() {
   await buildContext.build()
-  await initKernel(await getEntries())
+  await initKernel()
   await liveReloadServer.reload()
 }
 
