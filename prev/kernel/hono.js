@@ -7,6 +7,7 @@ import { serve } from '@hono/node-server'
 import * as esbuild from 'esbuild'
 import kl from 'kleur'
 import { log } from '../lib/logger.js'
+import { getRouterModule } from '../lib/router.js'
 
 const DYNAMIC_PARAM_START = /\/\+/g
 const ENDS_WITH_EXT = /\.(jsx?|tsx?)$/
@@ -78,27 +79,23 @@ const server = {
 }
 
 export async function kernel({
-  entries,
   isDev,
   liveServerPort,
   plugRegister,
   baseDir,
   clientDirectory,
-  sourceDir,
+  routes,
 }) {
-  const routeRegisterSeq = []
-
   await server.init({ force: true })
 
-  for (const x of entries) {
-    if (!x.startsWith(path.resolve(sourceDir, 'pages'))) continue
-    const _x = x.replace(sourceDir, baseDir)
-    if (isDynamicKey(_x, baseDir)) routeRegisterSeq.push(_x)
-    else routeRegisterSeq.unshift(_x)
-  }
+  const routerModule = await getRouterModule(baseDir)
+  await routerModule(server.app)
 
-  for (const registerKey of routeRegisterSeq) {
-    await registerRoute(server.app, registerKey, baseDir, plugRegister, {
+  for (const route of routes) {
+    await registerRoute(server.app, {
+      ...route,
+      outDir: baseDir,
+      plugRegister,
       isDev,
       clientDirectory,
       liveServerPort,
@@ -123,40 +120,20 @@ export async function kernel({
 
 async function registerRoute(
   router,
-  registerKey,
-  outDir,
-  plugRegister,
-  { clientDirectory, isDev, liveServerPort } = {}
+  { url, module, plugRegister, isDev, outDir, clientDirectory, liveServerPort }
 ) {
-  let mod = await import(path.resolve(registerKey) + `?update=${Date.now()}`)
-  mod = mod.default || mod
-  const replacementRegex = new RegExp(`^${outDir}\/pages`)
-  if (!replacementRegex.test(registerKey)) return
-
-  let routeFor = registerKey
-    .replace(replacementRegex, '')
-    .replace(ENDS_WITH_EXT, '')
-
-  if (DYNAMIC_PARAM_START.test(routeFor))
-    routeFor = routeFor.replace(DYNAMIC_PARAM_START, '/:')
-
-  if (/\/index\/?/.test(routeFor)) {
-    routeFor = routeFor.replace(/\/index\/?/, '')
-    if (routeFor.length === 0) routeFor = '/'
-  }
-
-  const allowedKeys = ['get', 'post', 'delete']
+  const allowedKeys = ['get', 'post', 'put', 'delete']
 
   for (const httpMethod of allowedKeys) {
-    if (!mod[httpMethod]) continue
+    if (!module[httpMethod]) continue
 
     if (httpMethod !== 'get') {
-      router[httpMethod](routeFor, mod[httpMethod])
+      router[httpMethod](url, module[httpMethod])
       continue
     }
 
-    router.get(routeFor, async ctx => {
-      const result = await mod.get(ctx)
+    router.get(url, async ctx => {
+      const result = await module.get(ctx)
       if (!result) return
 
       // Handle normal Hono Responses
@@ -174,14 +151,6 @@ async function registerRoute(
       )
     })
   }
-}
-
-function isDynamicKey(registerKey, baseDir) {
-  const replacementRegex = new RegExp(`^${baseDir}\/pages`)
-  let routeFor = registerKey
-    .replace(replacementRegex, '')
-    .replace(ENDS_WITH_EXT, '')
-  return DYNAMIC_PARAM_START.test(routeFor)
 }
 
 async function renderer(

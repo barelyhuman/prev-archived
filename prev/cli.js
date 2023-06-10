@@ -18,6 +18,8 @@ import process from 'node:process'
 import coffeescript from 'esbuild-coffeescript'
 import { config as userConfig } from '../prev.config.js'
 
+import { scanDirectoryForRoutes } from './lib/router.js'
+
 const config = normalizeConfig(userConfig)
 
 const require = createRequire(import.meta.url)
@@ -69,7 +71,7 @@ async function main() {
   const entries = await getEntries()
   await builder(islandDirectory, entries)
   await buildContext.build()
-  await initKernel(entries)
+  await initKernel()
 }
 
 async function cleanup() {
@@ -254,17 +256,19 @@ async function watcher() {
   liveReloadServer.setup()
 }
 
-async function initKernel(entries) {
+async function initKernel() {
   log.debug('Starting server')
   const kernel = await config.getKernel()
+  const routes = await scanDirectoryForRoutes(
+    path.resolve(rootDirectory, './dist/pages')
+  )
   await kernel({
-    entries,
     isDev,
     liveServerPort: LIVE_SERVER_PORT,
     plugRegister,
     clientDirectory: clientDirectory,
     baseDir: path.resolve(__dirname, islandDirectory),
-    sourceDir: path.resolve(rootDirectory, './src'),
+    routes,
   })
 }
 
@@ -292,7 +296,7 @@ function normalizeConfig(config) {
 async function queueRestart() {
   log.print('Restarting...')
   await buildContext.build()
-  await initKernel(await getEntries())
+  await initKernel()
   await liveReloadServer.reload()
 }
 
